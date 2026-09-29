@@ -2,22 +2,7 @@ import random
 from collections import Counter
 
 from checker import can_form_sets, is_winning_hand
-from tiles import SUITS, WINDS, DRAGONS, all_tile_types
-
-
-def hand(text):
-    """Turn "1b 2b 3b" style shorthand into tile names (test helper only)."""
-    suits = {"b": "bamboo", "c": "circles", "k": "characters"}
-    honors = {"E": "east-wind", "S": "south-wind", "W": "west-wind",
-              "N": "north-wind", "R": "red-dragon", "G": "green-dragon",
-              "P": "white-dragon"}
-    out = []
-    for word in text.split():
-        if word in honors:
-            out.append(honors[word])
-        else:
-            out.append(f"{word[0]}-{suits[word[1]]}")
-    return out
+from helpers import build_random_winning_hand, hand
 
 
 # ---------- hands that ARE winning ----------
@@ -94,30 +79,11 @@ def test_checker_does_not_mutate_its_input():
     assert tiles == before
 
 
-def _build_random_winning_hand(rng):
-    """Build a hand that is winning BY CONSTRUCTION: 4 random sets + a pair.
-
-    Returns None if the random choices would need a 5th copy of a tile.
-    """
-    tiles = []
-    for _ in range(4):
-        if rng.random() < 0.5:
-            suit, start = rng.choice(SUITS), rng.randint(1, 7)
-            tiles += [f"{start + i}-{suit}" for i in range(3)]       # a run
-        else:
-            tiles += [rng.choice(all_tile_types())] * 3              # a triplet
-    tiles += [rng.choice(all_tile_types())] * 2                      # the pair
-    if max(Counter(tiles).values()) > 4:
-        return None
-    rng.shuffle(tiles)
-    return tiles
-
-
 def test_hands_built_to_win_are_recognised():
     rng = random.Random(42)
     checked = 0
     while checked < 500:
-        tiles = _build_random_winning_hand(rng)
+        tiles = build_random_winning_hand(rng)
         if tiles is None:
             continue
         assert is_winning_hand(tiles), tiles
