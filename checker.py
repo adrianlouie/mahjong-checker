@@ -24,12 +24,15 @@ from collections import Counter
 
 from tiles import TILE_ORDER, is_numbered, parse_tile
 
-HAND_SIZE = 14
-
-
 def is_winning_hand(tiles):
-    """True if `tiles` is 14 tiles forming 4 sets + 1 pair."""
-    if len(tiles) != HAND_SIZE:
+    """True if `tiles` form some sets plus exactly one pair.
+
+    With no melds on the table that means 14 tiles = 4 sets + 1 pair. Each
+    meld you have already claimed (pong/chi) is a finished set that lives on
+    the table, so you pass only your CONCEALED tiles: 11 tiles for 1 meld,
+    8 for 2, 5 for 3, 2 for 4. In every case the count is 3k + 2.
+    """
+    if len(tiles) < 2 or len(tiles) % 3 != 2:
         return False
 
     counts = Counter(tiles)

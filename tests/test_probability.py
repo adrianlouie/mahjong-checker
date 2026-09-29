@@ -4,6 +4,7 @@ import pytest
 
 from checker import is_winning_hand
 from helpers import hand, near_winning_hands
+from tiles import random_hand
 from probability import (_candidate_tiles, TILE_TYPES, analyse_hand,
                          chance_to_see, discard_options, estimate_ready_rate,
                          estimate_win_rate, shanten, shanten_distribution,
@@ -143,3 +144,56 @@ def test_shanten_distribution_sums_to_one_and_is_far_from_winning():
     assert sum(dist.values()) == pytest.approx(1)
     average = sum(k * v for k, v in dist.items())
     assert average > 3
+
+
+# ---------- fast shanten vs the original slow one ----------
+
+def test_fast_shanten_matches_slow_reference_on_many_hands():
+    from helpers import slow_shanten
+    rng = random.Random(21)
+    hands = near_winning_hands(rng, 300, size=13, max_swaps=6)
+    hands += near_winning_hands(rng, 300, size=14, max_swaps=6)
+    hands += [random_hand(13, rng) for _ in range(150)]
+    hands += [random_hand(14, rng) for _ in range(150)]
+    for tiles in hands:
+        assert shanten(tiles) == slow_shanten(tiles), tiles
+
+
+# ---------- melds ----------
+
+def test_shanten_with_melds_counts_them_as_sets():
+    # one meld on the table + 10 concealed tiles: 3 sets and a pair short one tile
+    concealed = hand("1b 2b 3b 4c 5c 6c 7k 8k 9k 5k")
+    assert shanten(concealed, melds=1) == 0
+    assert shanten(concealed + hand("5k"), melds=1) == -1
+
+
+def test_shanten_with_four_melds():
+    assert shanten(hand("5k"), melds=4) == 0
+    assert shanten(hand("5k 5k"), melds=4) == -1
+
+
+def test_winning_tiles_with_a_meld():
+    concealed = hand("1b 2b 3b 4c 5c 6c 7k 8k 9k 5k")           # 10 tiles + 1 meld
+    assert winning_tiles(concealed) == ["5-characters"]
+
+
+def test_winning_tiles_respects_tiles_locked_in_melds():
+    concealed = hand("1b 2b 3b 4c 5c 6c 7k 8k 9k 5k")
+    # all four other 5-characters are tied up in melds/hands we can see: none left
+    exposed = hand("5k 5k 5k")
+    assert winning_tiles(concealed, exposed) == []
+
+
+def test_unseen_counts_subtracts_meld_tiles():
+    unseen = unseen_counts(hand("1b"), [], melds_tiles=hand("2b 2b 2b"))
+    assert unseen["2-bamboo"] == 1
+    assert sum(unseen.values()) == 136 - 1 - 3
+
+
+def test_shanten_matches_slow_reference_with_melds():
+    from helpers import slow_shanten
+    rng = random.Random(4)
+    for melds, size in ((1, 10), (2, 7), (3, 4)):
+        for tiles in near_winning_hands(rng, 80, size=size, max_swaps=3):
+            assert shanten(tiles, melds) == slow_shanten(tiles, melds), (melds, tiles)

@@ -105,3 +105,22 @@ def test_first_pair_choice_can_be_wrong():
     without_dragon_pair = Counter(tiles)
     without_dragon_pair["white-dragon"] -= 2
     assert can_form_sets(without_dragon_pair)
+
+
+# ---------- hands with melds already on the table ----------
+
+def test_wins_with_one_meld_on_the_table():
+    # 11 concealed tiles = 3 sets + pair (the 4th set is a claimed meld)
+    assert is_winning_hand(hand("1b 2b 3b 4c 5c 6c 7k 8k 9k 5k 5k"))
+
+
+def test_wins_with_four_melds_needs_just_a_pair():
+    assert is_winning_hand(hand("R R"))
+    assert not is_winning_hand(hand("R G"))
+
+
+def test_length_must_be_3k_plus_2():
+    assert not is_winning_hand([])
+    assert not is_winning_hand(hand("R"))
+    assert not is_winning_hand(hand("1b 2b 3b 4b 5b 6b 7b 8b 9b 1c"))      # 10 tiles
+    assert not is_winning_hand(hand("1b 2b 3b 4b 5b 6b 7b 8b 9b 1c 2c 3c"))  # 12 tiles

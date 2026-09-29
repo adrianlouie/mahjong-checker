@@ -9,7 +9,8 @@ Three ideas live here:
 2. SHANTEN ("how many tiles away am I?"): 0 = ready, 1 = one step from ready,
    2 = two steps, ... and -1 = already a winning hand. Without this, a fresh
    hand would sit at "0% chance" for many turns and the game would feel dead.
-   It's another recursive search, like the checker.
+   It's another recursive search, like the checker. Melds you've already
+   claimed count as finished sets.
 
 3. PROBABILITY: given the tiles I can't see yet (the "unseen pool"), what is
    the chance that I see at least one tile that helps me?
@@ -32,18 +33,23 @@ NUMBERED_COUNT = 27   # the first 27 tile types are the numbered suits (3 x 9)
 # 1. Ready hands / waits
 # ---------------------------------------------------------------------------
 
-def winning_tiles(hand13):
-    """Which tiles would complete this 13-tile hand? (empty list = not ready)
+def winning_tiles(hand, exposed=()):
+    """Which tiles would complete this hand? (empty list = not ready)
+
+    `hand` is your concealed tiles (13 with no melds). `exposed` are the tiles
+    in your melds, which still count towards the 4 copies of each tile.
 
     Brute force: for each of the 34 tile types, add it and run the checker.
-    We skip a tile type if we already hold all 4 copies - a 5th can't exist.
+    We skip a tile type if all 4 copies are already in our hands - a 5th
+    can't exist.
     """
-    held = Counter(hand13)
+    held = Counter(hand)
+    held.update(exposed)
     waits = []
     for tile in TILE_TYPES:
         if held[tile] >= COPIES:
             continue
-        if is_winning_hand(list(hand13) + [tile]):
+        if is_winning_hand(list(hand) + [tile]):
             waits.append(tile)
     return waits
 
@@ -52,68 +58,100 @@ def winning_tiles(hand13):
 # 2. Shanten
 # ---------------------------------------------------------------------------
 
-def shanten(tiles):
+# The distance calculation runs thousands of times (every bot decision, every
+# simulated game), so it is built to be cheap: each suit is solved on its own
+# and remembered (cached), then the four groups are combined.
+
+def _plus(options, sets, partials, head):
+    """Add a building block to every option; drop options with two pairs."""
+    return {(s + sets, p + partials, h + head) for s, p, h in options if h + head <= 1}
+
+
+def _prune(options):
+    """Drop options that are beaten on every count by another option."""
+    return {a for a in options
+            if not any(b != a and b[0] >= a[0] and b[1] >= a[1] and b[2] >= a[2]
+                       for b in options)}
+
+
+@lru_cache(maxsize=None)
+def _group_options(counts, numbered):
+    """All (sets, partials, head) splits of ONE suit (or the honors).
+
+    `counts` is a tuple of how many copies we hold of each rank (or of each
+    honor). Same trial-and-error idea as the checker: look at the first tile
+    left, try each thing it could be part of, and recurse on what remains.
+    """
+    n = len(counts)
+
+    @lru_cache(maxsize=None)
+    def go(i, c0, c1, c2):
+        # i = position; c0, c1, c2 = tiles still unused at i, i+1, i+2
+        if i >= n:
+            return {(0, 0, 0)}
+        if c0 == 0:
+            return go(i + 1, c1, c2, counts[i + 3] if i + 3 < n else 0)
+
+        found = set(go(i, c0 - 1, c1, c2))                        # leave one unused
+        if c0 >= 3:                                                # triplet
+            found |= _plus(go(i, c0 - 3, c1, c2), 1, 0, 0)
+        if c0 >= 2:
+            rest = go(i, c0 - 2, c1, c2)
+            found |= _plus(rest, 0, 1, 0)                          # pair as a partial set
+            found |= _plus(rest, 0, 0, 1)                          # pair as THE pair
+        if numbered:
+            if i + 2 < n and c1 and c2:                            # run, e.g. 4-5-6
+                found |= _plus(go(i, c0 - 1, c1 - 1, c2 - 1), 1, 0, 0)
+            if i + 1 < n and c1:                                   # partial, e.g. 4-5
+                found |= _plus(go(i, c0 - 1, c1 - 1, c2), 0, 1, 0)
+            if i + 2 < n and c2:                                   # partial, e.g. 4-6
+                found |= _plus(go(i, c0 - 1, c1, c2 - 1), 0, 1, 0)
+        return frozenset(_prune(found))
+
+    return go(0, counts[0], counts[1], counts[2])
+
+
+@lru_cache(maxsize=None)
+def _shanten_from_counts(counts, melds):
+    states = {(melds, 0, 0)}
+    for start, stop, numbered in ((0, 9, True), (9, 18, True), (18, 27, True), (27, 34, False)):
+        options = _group_options(counts[start:stop], numbered)
+        states = _prune({(s1 + s2, p1 + p2, h1 + h2)
+                         for s1, p1, h1 in states for s2, p2, h2 in options
+                         if h1 + h2 <= 1 and s1 + s2 <= 4})
+    return min(8 - (2 * s + min(p, 4 - s) + h) for s, p, h in states)
+
+
+def shanten(tiles, melds=0):
     """Distance from a winning hand: -1 win, 0 ready, 1, 2, ...
 
-    We try to split the tiles into building blocks:
+    `tiles` are your CONCEALED tiles; `melds` is how many sets (pong/chi) you
+    already have on the table. We split the concealed tiles into building
+    blocks:
         set     = triplet or run           (worth 2 points)
         partial = pair or 2-of-a-run       (worth 1 point: one tile from a set)
         head    = the single pair we need  (worth 1 point)
-    and the shanten number is 8 - 2*sets - partials - head, using the best
-    split. Only 4 sets+partials can count in total (that's all a hand has room
-    for), so partials are capped at 4 - sets.
-
-    Same backtracking spirit as checker.py: at each tile, try each way of using
-    it, recurse, and keep the best result.
+    and the distance is 8 - 2*sets - partials - head for the best split. A hand
+    only has room for 4 sets, so partials are capped at 4 - sets. Melds count
+    as sets we already have.
     """
     counts = [0] * len(TILE_TYPES)
     for tile in tiles:
         counts[TILE_ORDER[tile]] += 1
-
-    def count_at(i):
-        return counts[i] if i < len(counts) else 0
-
-    @lru_cache(maxsize=None)
-    def best(i, c0, c1, c2, sets, partials, head):
-        # i = tile position; c0, c1, c2 = tiles still unused at i, i+1, i+2.
-        if sets > 4:
-            return 99
-        if i >= len(counts):
-            return 8 - 2 * sets - min(partials, 4 - sets) - head
-        if c0 == 0:                          # nothing left here: next position
-            return best(i + 1, c1, c2, count_at(i + 3), sets, partials, head)
-
-        numbered = i < NUMBERED_COUNT
-        rank = i % 9 + 1                     # only meaningful if numbered
-        result = best(i, c0 - 1, c1, c2, sets, partials, head)      # leave it alone
-        if c0 >= 3:                                                  # triplet
-            result = min(result, best(i, c0 - 3, c1, c2, sets + 1, partials, head))
-        if c0 >= 2 and not head:                                     # the pair
-            result = min(result, best(i, c0 - 2, c1, c2, sets, partials, 1))
-        if c0 >= 2:                                                  # pair as partial
-            result = min(result, best(i, c0 - 2, c1, c2, sets, partials + 1, head))
-        if numbered and rank <= 7 and c1 >= 1 and c2 >= 1:           # run
-            result = min(result, best(i, c0 - 1, c1 - 1, c2 - 1, sets + 1, partials, head))
-        if numbered and rank <= 8 and c1 >= 1:                       # e.g. 4-5
-            result = min(result, best(i, c0 - 1, c1 - 1, c2, sets, partials + 1, head))
-        if numbered and rank <= 7 and c2 >= 1:                       # e.g. 4-6
-            result = min(result, best(i, c0 - 1, c1, c2 - 1, sets, partials + 1, head))
-        return result
-
-    return best(0, counts[0], counts[1], counts[2], 0, 0, 0)
+    return _shanten_from_counts(tuple(counts), melds)
 
 
-def useful_tiles(hand, unseen):
-    """Tiles that would lower this hand's shanten, with copies left unseen.
+def useful_tiles(hand, unseen, melds=0):
+    """Tiles that would lower this hand's distance, with copies left unseen.
 
-    Returns a list of (tile, copies_left). For a ready hand (shanten 0) these
+    Returns a list of (tile, copies_left). For a ready hand (distance 0) these
     are exactly the winning tiles.
     """
-    current = shanten(hand)
+    current = shanten(hand, melds)
     useful = []
     for tile in _candidate_tiles(hand):
         copies = unseen.get(tile, 0)
-        if copies > 0 and shanten(list(hand) + [tile]) < current:
+        if copies > 0 and shanten(list(hand) + [tile], melds) < current:
             useful.append((tile, copies))
     return useful
 
@@ -141,14 +179,17 @@ def _candidate_tiles(hand):
 # 3. Probability
 # ---------------------------------------------------------------------------
 
-def unseen_counts(my_hand, discards):
-    """Tiles I can't see: the full set minus my hand minus everything discarded.
+def unseen_counts(my_hand, discards, melds_tiles=()):
+    """Tiles I can't see: the full set minus my hand, all discards, all melds.
 
-    (Opponents' hidden hands and the wall are both "unseen" to me.)
+    `melds_tiles` are the tiles of every meld on the table (mine and the bots'),
+    because claimed sets are face-up. Opponents' hidden hands and the wall are
+    both "unseen" to me.
     """
     unseen = Counter(build_full_set())
     unseen.subtract(my_hand)
     unseen.subtract(discards)
+    unseen.subtract(melds_tiles)
     return +unseen      # unary + drops zero/negative counts
 
 
@@ -167,13 +208,13 @@ def chance_to_see(helpful_copies, unseen_total, looks):
     return 1 - misses / comb(unseen_total, looks)
 
 
-def analyse_hand(hand13, unseen, looks_next_round, looks_rest_of_game):
-    """Everything the UI shows about a 13-tile hand."""
-    useful = useful_tiles(hand13, unseen)
+def analyse_hand(hand13, unseen, looks_next_round, looks_rest_of_game, melds=0):
+    """Everything the UI shows about a hand that is one tile from a discard."""
+    useful = useful_tiles(hand13, unseen, melds)
     copies = sum(n for _, n in useful)
     total = sum(unseen.values())
     return {
-        "shanten": shanten(hand13),
+        "shanten": shanten(hand13, melds),
         "useful": useful,
         "useful_copies": copies,
         "chance_next_round": chance_to_see(copies, total, looks_next_round),
@@ -181,8 +222,8 @@ def analyse_hand(hand13, unseen, looks_next_round, looks_rest_of_game):
     }
 
 
-def discard_options(hand14, unseen, looks_next_round, looks_rest_of_game):
-    """For a 14-tile hand: what happens to my chances if I discard each tile?
+def discard_options(hand14, unseen, looks_next_round, looks_rest_of_game, melds=0):
+    """For a hand about to discard: what happens if I discard each tile?
 
     Returns one row per DIFFERENT tile in the hand, best discard first
     (lowest shanten, then most useful tiles left).
@@ -191,7 +232,7 @@ def discard_options(hand14, unseen, looks_next_round, looks_rest_of_game):
     for tile in sorted(set(hand14), key=TILE_ORDER.__getitem__):
         remaining = list(hand14)
         remaining.remove(tile)
-        info = analyse_hand(remaining, unseen, looks_next_round, looks_rest_of_game)
+        info = analyse_hand(remaining, unseen, looks_next_round, looks_rest_of_game, melds)
         info["discard"] = tile
         rows.append(info)
     rows.sort(key=lambda r: (r["shanten"], -r["useful_copies"]))
