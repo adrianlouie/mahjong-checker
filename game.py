@@ -72,6 +72,50 @@ class Game:
         self._run()
 
     # ------------------------------------------------------------------
+    # copies, for simulations
+    # ------------------------------------------------------------------
+
+    def clone(self):
+        """An independent copy: playing the copy never changes this game."""
+        copy = Game.__new__(Game)
+        copy.__dict__.update(self.__dict__)
+        copy.wall = list(self.wall)
+        copy.players = []
+        for p in self.players:
+            player = Player(p.name, list(p.concealed))
+            player.melds = list(p.melds)          # melds are never edited, only added
+            copy.players.append(player)
+        copy.discards = list(self.discards)
+        copy.log = list(self.log)
+        copy.history = []
+        return copy
+
+    def determinize(self, rng, auto=True):
+        """A copy in which the tiles YOU can't see are randomly redealt.
+
+        You know your own hand, every discard and every meld. Everything else
+        (the bots' hidden tiles and the wall) is unknown, so we shuffle it and
+        deal it back out: each bot gets as many tiles as it really holds and
+        the rest becomes the wall. Replaying that "possible world" many times
+        is what the Monte Carlo odds are made of.
+
+        With auto=True the copy is played entirely by the bot AI (you too).
+        """
+        world = self.clone()
+        world.rng, world.auto = rng, auto
+        unseen = list(unseen_counts(self.me.concealed, [t for t, _ in self.discards],
+                                    self._all_meld_tiles()).elements())
+        rng.shuffle(unseen)
+        start = 0
+        for player in world.players[1:]:
+            size = len(player.concealed)
+            player.concealed = unseen[start:start + size]
+            start += size
+        world.wall = unseen[start:]
+        assert len(world.wall) == len(self.wall), "tile counts don't add up"
+        return world
+
+    # ------------------------------------------------------------------
     # your actions
     # ------------------------------------------------------------------
 
