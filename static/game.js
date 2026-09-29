@@ -2,6 +2,9 @@
 "use strict";
 
 let state = null;
+let odds = null;        // simulated win chances for the current decision (arrive a moment later)
+let oddsToken = 0;      // lets us ignore an answer that arrives after the game has moved on
+let oddsRequest = null; // the in-flight odds request, cancelled when the game moves on
 
 const $ = (id) => document.getElementById(id);
 
@@ -20,7 +23,9 @@ async function api(path, body) {
     return;
   }
   state = data;
+  odds = null;
   render();
+  loadOdds();
 }
 
 const loadState = () => api("/api/state");
@@ -28,6 +33,25 @@ const newGame = () => api("/api/new");
 const discard = (tile) => api("/api/discard", { tile });
 const declareWin = () => api("/api/win", {});
 const passClaim = () => api("/api/pass", {});
+const claim = (kind, tiles) => api("/api/claim", { kind, tiles });
+
+// The simulation takes ~2 seconds, so it is fetched separately from the fast state.
+async function loadOdds() {
+  const token = ++oddsToken;
+  if (oddsRequest) oddsRequest.abort();
+  if (state.phase !== "playing" && state.phase !== "claim") return;
+  oddsRequest = new AbortController();
+  try {
+    const response = await fetch("/api/odds", { signal: oddsRequest.signal });
+    const data = await response.json();
+    if (token !== oddsToken || !response.ok) return;
+    odds = data;
+  } catch (error) {
+    return;
+  }
+  renderActions();
+  renderOdds();
+}
 
 // ---------- small helpers ----------
 
@@ -68,14 +92,28 @@ function tileEl(tile, { small = false, clickable = false, classes = [] } = {}) {
 
 function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
+// Simulated numbers for one choice, or undefined while the simulation is still running.
+function oddsFor(action, tiles) {
+  if (!odds) return undefined;
+  return odds.options.find((o) => o.action === action && o.tiles.join() === tiles.join());
+}
+
+function marginText() {
+  // 95% margin of error for a proportion near 50%, given how many games were simulated
+  return odds && odds.playouts ? `±${Math.round(98 / Math.sqrt(odds.playouts))}%` : "";
+}
+
 // ---------- drawing the page ----------
 
 function render() {
   $("round").textContent = state.round;
   $("wall").textContent = state.wall_count;
   renderBanner();
-  renderHand();
+  renderOthers();
   renderDiscards();
+  renderMelds($("my-melds"), state.melds);
+  renderHand();
+  renderActions();
   renderLog();
   renderOdds();
   renderChart();
@@ -84,18 +122,68 @@ function render() {
 function renderBanner() {
   const banner = $("banner");
   let text = "";
+  const offer = state.offer;
   if (state.phase === "won") {
     text = state.winner === 0 ? "You won! 🎉 Start a new game to play again."
                               : `${state.winner_name} won this round. Start a new game to play again.`;
   } else if (state.phase === "drawn") {
     text = "The wall is empty – nobody wins this time.";
+  } else if (state.phase === "claim" && offer.win) {
+    text = `${offer.from_name} discarded a tile that completes your hand – win, or pass?`;
   } else if (state.phase === "claim") {
-    text = `${state.offer.from_name} discarded a tile that completes your hand – win, or pass?`;
+    const ways = [offer.pong ? "pong" : "", offer.chi.length ? "chi" : ""].filter(Boolean).join(" or ");
+    text = `${offer.from_name} discarded ${offer.tile.replace("-", " ")} – you may ${ways} it.`;
   } else if (state.can_declare_win) {
-    text = "Your 14 tiles form a winning hand!";
+    text = "Your hand is a winning hand!";
   }
   banner.hidden = !text;
   banner.textContent = text;
+}
+
+function renderMelds(container, melds) {
+  clear(container);
+  for (const meld of melds) {
+    const group = document.createElement("span");
+    group.className = "meld";
+    group.title = meld.type;
+    let markedClaimed = false;
+    for (const tile of meld.tiles) {
+      const isClaimed = !markedClaimed && tile === meld.claimed;
+      markedClaimed = markedClaimed || isClaimed;
+      group.append(tileEl(tile, { small: true, classes: isClaimed ? ["claimed"] : [] }));
+    }
+    container.append(group);
+  }
+}
+
+function renderOthers() {
+  const box = $("others");
+  clear(box);
+  for (const other of state.others) {
+    const card = document.createElement("div");
+    card.className = "opp";
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = other.name + " ";
+    const count = document.createElement("span");
+    count.className = "count";
+    count.textContent = `${other.concealed_count} hidden tiles`;
+    name.append(count);
+    card.append(name);
+
+    const melds = document.createElement("div");
+    melds.className = "melds";
+    renderMelds(melds, other.melds);
+    card.append(melds);
+
+    if (other.hand) {                    // the game is over: show what they were holding
+      const tiles = document.createElement("div");
+      tiles.className = "tiles";
+      for (const tile of other.hand) tiles.append(tileEl(tile, { small: true }));
+      card.append(tiles);
+    }
+    box.append(card);
+  }
 }
 
 function renderHand() {
@@ -124,11 +212,61 @@ function renderHand() {
   $("hand-hint").textContent = playing
     ? "click a tile to discard it · green outline = best discard"
     : "";
-  $("win-btn").hidden = !(state.can_declare_win || state.phase === "claim");
-  $("win-btn").textContent = state.phase === "claim" ? "Win on this discard" : "Declare win";
-  $("win-btn").onclick = declareWin;
-  $("pass-btn").hidden = state.phase !== "claim";
-  $("pass-btn").onclick = passClaim;
+}
+
+function actionButton(label, onclick, { secondary = false, sub = "", tiles = [] } = {}) {
+  const button = document.createElement("button");
+  if (secondary) button.className = "secondary";
+  const top = document.createElement("span");
+  top.textContent = label + " ";
+  if (tiles.length) {
+    const wrap = document.createElement("span");
+    wrap.className = "tiles";
+    for (const tile of tiles) wrap.append(tileEl(tile, { small: true }));
+    top.append(wrap);
+  }
+  button.append(top);
+  if (sub) {
+    const line = document.createElement("span");
+    line.className = "sub";
+    line.textContent = sub;
+    button.append(line);
+  }
+  button.onclick = onclick;
+  return button;
+}
+
+function claimSub(action, tiles) {
+  const choice = (state.analysis.claims || []).find(
+    (c) => c.action === action && (action === "pong" || c.tiles.join() === tiles.join()));
+  const parts = [];
+  if (choice) parts.push(`then ${distanceText(choice.shanten).toLowerCase()}`);
+  const sim = oddsFor(action, action === "pong" ? [] : tiles);
+  if (sim) parts.push(`${pct(sim.you)} to win`);
+  return parts.join(" · ");
+}
+
+function renderActions() {
+  const box = $("actions");
+  clear(box);
+  const offer = state.offer;
+  if (state.phase === "claim" && offer.win) {
+    box.append(actionButton("Win on this discard", declareWin));
+    box.append(actionButton("Pass", passClaim, { secondary: true }));
+  } else if (state.phase === "claim") {
+    if (offer.pong) {
+      box.append(actionButton("Pong", () => claim("pong"), { sub: claimSub("pong", []) }));
+    }
+    for (const pair of offer.chi) {
+      box.append(actionButton("Chi", () => claim("chi", pair), {
+        tiles: [...pair, offer.tile].sort((a, b) => parseInt(a) - parseInt(b)),   // same suit: sort by rank
+        sub: claimSub("chi", pair),
+      }));
+    }
+    box.append(actionButton("Pass", passClaim, { secondary: true, sub: claimSub("pass", []) }));
+  } else if (state.can_declare_win) {
+    box.append(actionButton("Declare win", declareWin));
+  }
 }
 
 function renderDiscards() {
@@ -139,7 +277,7 @@ function renderDiscards() {
     box.lastChild.title += ` (${who})`;
   }
   if (state.offer && box.lastChild) {
-    box.lastChild.classList.add("suggest");
+    box.lastChild.classList.add("suggest");      // the tile you may claim
   }
   box.scrollTop = box.scrollHeight;
 }
@@ -183,7 +321,7 @@ function renderOdds() {
   }
 
   const ready = current.shanten === 0;
-  $("odds-sub").textContent = options ? "assuming you make the best discard" : "";
+  $("odds-sub").textContent = options ? "assuming you make the best discard" : "if you pass";
   metrics.append(
     metric("Distance to winning", distanceText(current.shanten), ready),
     metric("Helpful tiles still unseen", current.useful_copies, ready),
@@ -191,9 +329,22 @@ function renderOdds() {
            pct(current.chance_next_round), ready),
   );
   if (ready) {
-    // Only meaningful once you're ready: otherwise it is trivially ~100%.
     metrics.append(metric("Win chance, before the wall runs out",
                           pct(current.chance_rest_of_game), true));
+  }
+
+  // simulated: replays the game many times, with bots racing you
+  if (odds && odds.options.length) {
+    const best = odds.options.reduce((a, b) => (b.you > a.you ? b : a));
+    metrics.append(
+      metric(`Simulated win chance, best option ${marginText()}`, pct(best.you), true),
+      metric("A bot wins first (simulated)", pct(best.bots)),
+    );
+  } else if (!odds && (state.phase === "playing" || state.phase === "claim") && !state.can_declare_win) {
+    const pending = document.createElement("div");
+    pending.className = "metric sim-pending";
+    pending.textContent = "Simulating the rest of the game…";
+    metrics.append(pending);
   }
 
   if (current.useful.length) {
@@ -212,12 +363,14 @@ function renderOdds() {
   for (const [index, row] of (options || []).entries()) {
     const tr = document.createElement("tr");
     if (index === 0) tr.className = "best";
+    const sim = oddsFor("discard", [row.discard]);
     const cells = [
       tileEl(row.discard, { small: true }),
       distanceText(row.shanten),
       row.useful.length ? `${row.useful.length} ${row.useful.length === 1 ? "kind" : "kinds"}` : "–",
       row.useful_copies,
       pct(row.chance_next_round),
+      sim ? pct(sim.you) : (odds ? "–" : "…"),
     ];
     for (const cell of cells) {
       const td = document.createElement("td");
@@ -267,7 +420,7 @@ function renderChart() {
     dot.append(svg.lastChild);
   });
   make("text", { x: (left + W - right) / 2, y: H - 4, "text-anchor": "middle", "font-size": 9, fill: "#6b665c" },
-       "round (green dot = ready hand; hover a dot for details)");
+       "turn (green dot = ready hand; hover a dot for details)");
 }
 
 $("new-game").onclick = newGame;

@@ -163,7 +163,8 @@ class Game:
         self.offer = None
         self._claim(0, kind, tile, src, list(used))
         self.phase = self.RUNNING
-        self._after_claim(0)
+        if not self._after_claim(0):     # in a simulation you discard automatically
+            self._run()
 
     def pass_claim(self):
         """Decline the offered tile; the game carries on without you claiming it."""

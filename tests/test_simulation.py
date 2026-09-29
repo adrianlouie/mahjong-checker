@@ -138,3 +138,15 @@ def test_simulating_a_claim_choice_runs():
     actions = candidate_actions(g)
     done, rows = simulate(g, actions, playouts=20, rng=random.Random(2))
     assert done == 20 and [r["action"] for r in rows] == [a["action"] for a in actions]
+
+
+def test_every_claim_choice_is_played_to_a_finish():
+    """Regression: claiming in a simulated world must carry on to the end of the game."""
+    g = natural_claim_game()
+    for action in candidate_actions(g):
+        world = g.determinize(random.Random(3))
+        apply_action(world, action)
+        assert world.phase in (Game.WON, Game.DRAWN), action
+    done, rows = simulate(g, candidate_actions(g), playouts=30, rng=random.Random(2))
+    assert all(r["you"] + r["bots"] + r["draw"] == pytest.approx(1) for r in rows)
+    assert all(r["draw"] < 1 for r in rows)              # somebody usually wins
