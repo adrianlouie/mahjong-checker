@@ -137,3 +137,49 @@ def test_pass_through_the_api():
     after = client.post("/api/pass").get_json()
     assert after["phase"] in ("playing", "claim", "won", "drawn")
     assert after["melds"] == []
+
+
+# ---------- simulated odds ----------
+
+def test_odds_for_a_discard_decision(client):
+    client.post("/api/new")
+    data = client.get("/api/odds?n=15&seconds=5").get_json()
+    assert data["kind"] == "discard"
+    assert data["playouts"] == 15
+    assert 1 <= len(data["options"]) <= 4
+    for row in data["options"]:
+        assert row["you"] + row["bots"] + row["draw"] == pytest.approx(1)
+        assert row["action"] == "discard"
+
+
+def test_odds_do_not_change_the_game(client):
+    before = client.post("/api/new").get_json()
+    client.get("/api/odds?n=10&seconds=5")
+    after = client.get("/api/state").get_json()
+    assert before["hand"] == after["hand"] and before["wall_count"] == after["wall_count"]
+
+
+def test_odds_for_a_claim_decision():
+    app = create_app(seed=7)
+    app.testing = True
+    client = app.test_client()
+    offer_setup(app, client, READY_13, "5-characters", 2)
+    data = client.get("/api/odds?n=10&seconds=5").get_json()
+    assert data["kind"] == "claim"
+    assert [r["action"] for r in data["options"]] == ["pass", "pong"]
+
+
+def test_no_odds_when_the_game_is_over():
+    app = create_app(seed=7)
+    app.testing = True
+    client = app.test_client()
+    client.post("/api/new")
+    app.config["game"].players[0].concealed = READY_13 + ["2-circles"]
+    client.post("/api/win")
+    assert client.get("/api/odds?n=5").get_json()["kind"] == "none"
+
+
+def test_odds_request_size_is_capped(client, monkeypatch):
+    monkeypatch.setattr("app.MAX_PLAYOUTS", 7)
+    client.post("/api/new")
+    assert client.get("/api/odds?n=100000&seconds=5").get_json()["playouts"] == 7
