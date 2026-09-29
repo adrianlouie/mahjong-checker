@@ -60,6 +60,12 @@ def can_form_sets(counts):
     #   (a) a triplet of it, or
     #   (b) a run STARTING at it (nothing smaller is left to start earlier).
     # So there are at most 2 choices, and we never try the same split twice.
+    #
+    # (Honest note: if we hold 3+ copies of the smallest tile, taking the
+    # triplet is always safe - three runs starting at the same tile can always
+    # be swapped for a triplet plus other runs. So the "undo" below rarely
+    # fires here. The real trial-and-error is choosing the PAIR in
+    # is_winning_hand: see test_first_pair_choice_can_be_wrong.)
 
     # Choice A: use a triplet of `first`.
     if counts[first] >= 3:

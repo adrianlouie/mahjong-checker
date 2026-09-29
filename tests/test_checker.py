@@ -23,7 +23,7 @@ def test_honor_pair():
     assert is_winning_hand(hand("1b 2b 3b 4c 5c 6c 7k 8k 9k 3b 3b 3b R R"))
 
 
-def test_needs_backtracking():
+def test_two_identical_runs():
     # 1b 1b 2b 2b 3b 3b can only be split as two runs (1-2-3 twice).
     # There are only two 1b, so the "triplet" choice is impossible.
     assert is_winning_hand(hand("1b 1b 2b 2b 3b 3b 4c 5c 6c 7k 8k 9k R R"))
@@ -88,3 +88,20 @@ def test_hands_built_to_win_are_recognised():
             continue
         assert is_winning_hand(tiles), tiles
         checked += 1
+
+
+def test_first_pair_choice_can_be_wrong():
+    # The checker tries pairs in this order: 6k, 7k, then white dragon.
+    # Only the white-dragon pair works, so the first two attempts must be
+    # undone (backtracked) before the third succeeds.
+    tiles = hand("4b 5b 6b 1c 2c 3c 5k 6k 6k 7k 7k 8k P P")
+    assert is_winning_hand(tiles)
+    without_6k_pair = Counter(tiles)
+    without_6k_pair["6-characters"] -= 2
+    assert not can_form_sets(without_6k_pair)
+    without_7k_pair = Counter(tiles)
+    without_7k_pair["7-characters"] -= 2
+    assert not can_form_sets(without_7k_pair)
+    without_dragon_pair = Counter(tiles)
+    without_dragon_pair["white-dragon"] -= 2
+    assert can_form_sets(without_dragon_pair)
