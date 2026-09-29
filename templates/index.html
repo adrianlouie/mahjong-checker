@@ -1,1 +1,61 @@
-<!doctype html><title>Mahjong</title>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mahjong Odds</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>Mahjong Odds <small>Hong Kong style · solitaire vs 3 bots</small></h1>
+    <div class="topbar">
+      <span class="pill">Round <b id="round">–</b></span>
+      <span class="pill">Wall <b id="wall">–</b></span>
+      <button id="new-game" class="secondary">New game</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main>
+    <section class="table">
+      <h2>Discards</h2>
+      <div id="discards" class="discards"></div>
+
+      <h2>Your hand <small id="hand-hint">click a tile to discard it</small></h2>
+      <div id="hand" class="hand"></div>
+      <div class="actions">
+        <button id="win-btn" hidden>Declare win</button>
+        <button id="pass-btn" class="secondary" hidden>Pass</button>
+      </div>
+
+      <h2>Log</h2>
+      <ul id="log" class="log"></ul>
+    </section>
+
+    <section class="odds">
+      <h2>Your chances <small id="odds-sub"></small></h2>
+      <div id="metrics" class="metrics"></div>
+      <div id="waits-box" hidden>
+        <h3 id="waits-title">Helpful tiles</h3>
+        <div id="waits" class="waits"></div>
+      </div>
+
+      <h3>If you discard…</h3>
+      <div class="table-wrap">
+        <table id="options">
+          <thead><tr><th>Discard</th><th>Distance</th><th>Helpful</th><th>Left</th><th>Next round</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <h3>Distance from winning, each round</h3>
+      <svg id="chart" viewBox="0 0 320 120" role="img" aria-label="Chart of your distance from winning each round"></svg>
+      <p class="note">Distance 0 = ready (one tile from winning); lower is better. "Next round" is the chance you see at least one helpful tile among the next 4 tiles (your draw plus 3 bot discards). Once you're ready, that's your win chance.</p>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='game.js') }}"></script>
+</body>
+</html>
