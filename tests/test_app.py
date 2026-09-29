@@ -38,7 +38,6 @@ def test_discard_advances_the_game(client):
     after = client.post("/api/discard", json={"tile": tile}).get_json()
     assert after["round"] == 2
     assert len(after["hand"]) == 14
-    assert len(after["discards"]) >= 4
     assert len(after["history"]) >= 2
 
 
@@ -86,3 +85,55 @@ def test_stats_endpoint(client):
 def test_stats_trials_are_capped(client, monkeypatch):
     monkeypatch.setattr("app.MAX_STATS_TRIALS", 200)
     assert client.get("/api/stats?trials=99999999").get_json()["trials"] == 200
+
+
+def offer_setup(app, client, me, tile, src):
+    """Rig the running game so that player `src` has just thrown `tile`."""
+    client.post("/api/new")
+    game = app.config["game"]
+    junk = hand("1b 4b 7b 1c 4c 7c 1k 4k 7k E S W N")
+    game.players[0].concealed = list(me)
+    for bot in game.players[1:]:
+        bot.concealed = list(junk)
+    game.discards.append((tile, src))
+    game.phase, game.next = game.RUNNING, ("resolve", tile, src, False)
+    game._run()
+
+
+def test_claim_pong_through_the_api():
+    app = create_app(seed=7)
+    app.testing = True
+    client = app.test_client()
+    offer_setup(app, client, READY_13, "5-characters", 2)
+    state = client.get("/api/state").get_json()
+    assert state["phase"] == "claim" and state["offer"]["pong"] is True
+    assert {c["action"] for c in state["analysis"]["claims"]} == {"pass", "pong"}
+    after = client.post("/api/claim", json={"kind": "pong"}).get_json()
+    assert after["phase"] == "playing"
+    assert after["melds"][0]["type"] == "pong"
+    assert len(after["hand"]) == 11
+
+
+def test_claim_chi_through_the_api():
+    app = create_app(seed=7)
+    app.testing = True
+    client = app.test_client()
+    offer_setup(app, client, hand("2b 3b 5b 6b R G P E S W N 9c 9k"), "4-bamboo", 3)
+    after = client.post("/api/claim", json={"kind": "chi",
+                                            "tiles": ["3-bamboo", "5-bamboo"]}).get_json()
+    assert after["melds"][0]["tiles"] == ["3-bamboo", "4-bamboo", "5-bamboo"]
+
+
+def test_bad_claim_is_a_400(client):
+    client.post("/api/new")
+    assert client.post("/api/claim", json={"kind": "pong"}).status_code == 400
+
+
+def test_pass_through_the_api():
+    app = create_app(seed=7)
+    app.testing = True
+    client = app.test_client()
+    offer_setup(app, client, READY_13, "5-characters", 2)
+    after = client.post("/api/pass").get_json()
+    assert after["phase"] in ("playing", "claim", "won", "drawn")
+    assert after["melds"] == []

@@ -2,7 +2,13 @@
 
 Four players sit in a circle: you (seat 0) and three bots (seats 1-3). Turn
 order is 0 -> 1 -> 2 -> 3 -> 0. On a turn a player draws a tile and discards
-one. After every discard, the other players get a chance to WIN on it.
+one. After every discard, the other players get a chance to claim it, in this order
+of priority:
+    1. win          any player can win on any discard
+    2. pong         any player can pong any discard (three identical tiles)
+    3. chi          ONLY the next player in turn order can chi (a run of three)
+A claim makes a face-up meld, and the claimer discards next (skipping the
+players in between). Otherwise the next player just draws.
 
 The engine is a small state machine (`self.next`) driven by `_run()`:
     ("draw", seat)                    that seat draws a tile
@@ -18,10 +24,11 @@ JSON for the web page.
 
 import random
 
-from bots import choose_discard
+from bots import best_chi, choose_discard, distance_after_claim, wants_pong
 from checker import is_winning_hand
+from melds import can_pong, chi_options
 from probability import analyse_hand, discard_options, unseen_counts
-from tiles import build_full_set, sorted_hand
+from tiles import build_full_set, sort_key, sorted_hand
 
 NAMES = ["You", "Bot 1", "Bot 2", "Bot 3"]
 LOOKS_PER_ROUND = 4   # my own draw + the 3 bot discards
@@ -94,6 +101,26 @@ class Game:
         else:
             raise ValueError("you can't win right now")
 
+    def claim(self, kind, tiles=None):
+        """Pong or chi the offered tile. For chi, `tiles` are the 2 tiles from your hand."""
+        self._require_phase(self.CLAIM)
+        offer = self.offer
+        tile, src = offer["tile"], offer["from"]
+        if kind == "pong":
+            if not offer["pong"]:
+                raise ValueError("you can't pong that tile")
+            used = [tile, tile]
+        elif kind == "chi":
+            used = tuple(sorted(tiles or [], key=sort_key))
+            if used not in [tuple(option) for option in offer["chi"]]:
+                raise ValueError("that is not a valid chi")
+        else:
+            raise ValueError("claim must be 'pong' or 'chi'")
+        self.offer = None
+        self._claim(0, kind, tile, src, list(used))
+        self.phase = self.RUNNING
+        self._after_claim(0)
+
     def pass_claim(self):
         """Decline the offered tile; the game carries on without you claiming it."""
         self._require_phase(self.CLAIM)
@@ -161,7 +188,33 @@ class Game:
             self._win(seat, "discard", tile, src)
             return True
 
-        # 2. Nobody wants it: the next player in turn order draws.
+        # 2. Pong. At most one player can hold two copies (only 3 others exist).
+        pong_seat = next((seat for seat in order
+                          if can_pong(self.players[seat].concealed, tile)), None)
+        if pong_seat is not None and (pong_seat != 0 or self.auto):
+            player = self.players[pong_seat]
+            if wants_pong(player.concealed, len(player.melds), tile):
+                self._claim(pong_seat, "pong", tile, src, [tile, tile])
+                return self._after_claim(pong_seat)
+
+        # 3. You may pong, or chi if the thrower sat just before you (seat 3).
+        if not self.auto and not passed:
+            chi = chi_options(self.me.concealed, tile) if src == 3 else []
+            if pong_seat == 0 or chi:
+                self._make_offer(tile, src, pong=pong_seat == 0, chi=chi)
+                return True
+
+        # 4. A bot may chi, but only the next player after the thrower.
+        chi_seat = (src + 1) % 4
+        if chi_seat != 0 or self.auto:
+            player = self.players[chi_seat]
+            pair = best_chi(player.concealed, len(player.melds),
+                            chi_options(player.concealed, tile))
+            if pair:
+                self._claim(chi_seat, "chi", tile, src, list(pair))
+                return self._after_claim(chi_seat)
+
+        # 5. Nobody wants it: the next player in turn order draws.
         self.next = ("draw", (src + 1) % 4)
         return False
 
@@ -173,6 +226,27 @@ class Game:
         self.players[seat].concealed.remove(tile)
         self.discards.append((tile, seat))
         self._log(f"{NAMES[seat]} discarded {tile}")
+
+    def _claim(self, seat, kind, tile, src, used):
+        """Move `used` tiles from a hand plus the discarded `tile` into a face-up meld."""
+        player = self.players[seat]
+        for t in used:
+            player.concealed.remove(t)
+        self.discards.pop()                        # the claimed tile leaves the discard pile
+        player.melds.append({"type": kind, "tiles": sorted_hand(used + [tile]),
+                             "claimed": tile, "from": src})
+        verb = "pong" if kind == "pong" else "chi"
+        self._log(f"{NAMES[seat]} called {verb} on {NAMES[src]}'s {tile}")
+
+    def _after_claim(self, seat):
+        """The claimer must now discard. Returns True if that needs YOU to act."""
+        if seat == 0 and not self.auto:
+            self.drawn_tile = None
+            self.phase = self.PLAYING
+            self._record_history()
+            return True
+        self.next = ("discard", seat)
+        return False
 
     def _make_offer(self, tile, src, win=False, pong=False, chi=()):
         self.offer = {"tile": tile, "from": src, "win": win, "pong": pong, "chi": list(chi)}
@@ -223,9 +297,24 @@ class Game:
             return {"options": discard_options(self.me.concealed, self._unseen(),
                                                next_round, rest, melds)}
         if self.phase == self.CLAIM:
-            return {"current": analyse_hand(self.me.concealed, self._unseen(),
-                                            next_round, rest, melds)}
+            current = analyse_hand(self.me.concealed, self._unseen(), next_round, rest, melds)
+            result = {"current": current}
+            if not self.offer["win"]:
+                result["claims"] = self._claim_choices(current["shanten"])
+            return result
         return {}
+
+    def _claim_choices(self, distance_now):
+        """How close each choice (pass / pong / chi) leaves you, after discarding well."""
+        tile, hand, melds = self.offer["tile"], self.me.concealed, len(self.me.melds)
+        choices = [{"action": "pass", "tiles": [], "shanten": distance_now}]
+        if self.offer["pong"]:
+            choices.append({"action": "pong", "tiles": [tile, tile],
+                            "shanten": distance_after_claim(hand, melds, [tile, tile])})
+        for pair in self.offer["chi"]:
+            choices.append({"action": "chi", "tiles": list(pair),
+                            "shanten": distance_after_claim(hand, melds, pair)})
+        return choices
 
     def _record_history(self):
         """Save this turn's best distance (used for the chart)."""

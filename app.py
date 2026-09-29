@@ -65,6 +65,12 @@ def create_app(seed=None):
         current_game().declare_win()
         return state_response()
 
+    @app.post("/api/claim")
+    def claim():
+        body = request.get_json(silent=True) or {}
+        current_game().claim(body.get("kind"), body.get("tiles"))
+        return state_response()
+
     @app.post("/api/pass")
     def pass_claim():
         current_game().pass_claim()
