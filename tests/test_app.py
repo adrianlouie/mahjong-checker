@@ -38,7 +38,7 @@ def test_discard_advances_the_game(client):
     after = client.post("/api/discard", json={"tile": tile}).get_json()
     assert after["round"] == 2
     assert len(after["hand"]) == 14
-    assert len(after["discards"]) >= 4 or after["phase"] == "claim"
+    assert len(after["discards"]) >= 4
     assert len(after["history"]) >= 2
 
 
@@ -69,10 +69,11 @@ def test_win_flow_through_the_api():
     app.testing = True
     client = app.test_client()
     client.post("/api/new")
-    app.config["game"].hand = READY_13 + ["2-circles"]        # rig a winning hand
+    app.config["game"].players[0].concealed = READY_13 + ["2-circles"]   # rig a winning hand
     state = client.get("/api/state").get_json()
     assert state["can_declare_win"] is True
-    assert client.post("/api/win").get_json()["phase"] == "won"
+    won = client.post("/api/win").get_json()
+    assert won["phase"] == "won" and won["winner"] == 0
 
 
 def test_stats_endpoint(client):

@@ -83,13 +83,14 @@ function render() {
 
 function renderBanner() {
   const banner = $("banner");
-  const msgs = {
-    won: "You won! 🎉 Start a new game to play again.",
-    drawn: "The wall is empty – nobody wins this time.",
-  };
-  let text = msgs[state.phase] || "";
-  if (state.phase === "claim") {
-    text = `${state.offered.who} discarded a tile that completes your hand – win, or pass?`;
+  let text = "";
+  if (state.phase === "won") {
+    text = state.winner === 0 ? "You won! 🎉 Start a new game to play again."
+                              : `${state.winner_name} won this round. Start a new game to play again.`;
+  } else if (state.phase === "drawn") {
+    text = "The wall is empty – nobody wins this time.";
+  } else if (state.phase === "claim") {
+    text = `${state.offer.from_name} discarded a tile that completes your hand – win, or pass?`;
   } else if (state.can_declare_win) {
     text = "Your 14 tiles form a winning hand!";
   }
@@ -137,9 +138,8 @@ function renderDiscards() {
     box.append(tileEl(tile, { small: true, classes: who === "You" ? ["from-you"] : [] }));
     box.lastChild.title += ` (${who})`;
   }
-  if (state.offered) {
-    box.append(tileEl(state.offered.tile, { small: true, classes: ["suggest"] }));
-    box.lastChild.title += ` (${state.offered.who}) – you can win on this`;
+  if (state.offer && box.lastChild) {
+    box.lastChild.classList.add("suggest");
   }
   box.scrollTop = box.scrollHeight;
 }
