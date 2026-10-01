@@ -147,15 +147,3 @@ A random hand almost never wins (fewer than 1 in 100,000 here), and roughly 1 in
 | `templates/`, `static/` | The web page (plain HTML/CSS/JavaScript that only draws what the server says) |
 | `stats.py` | Command-line Monte Carlo statistics |
 | `tests/` | pytest tests for every module |
-
-## Limits (on purpose)
-
-- **Shape only.** Real Hong Kong play also requires a minimum number of *faan* (scoring points) to win. This project only checks the sets-plus-pair shape, and does no scoring. Bots will "win" with hands a real table wouldn't accept.
-- No Thirteen Orphans or Seven Pairs, no kongs (four-of-a-kind), and no concealed-hand bonuses.
-- The bots are greedy and simple. They don't defend or read discards.
-- If you pass on a winning tile, you can't claim that same tile as a pong/chi (a simplification).
-- One game is kept in server memory, so it's a single-player local app.
-
-## Ideas for later
-
-Thirteen Orphans, kongs, faan scoring, smarter bots (defence, reading discards), using discards to guess bots' hands in the simulation.
